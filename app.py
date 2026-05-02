@@ -7,12 +7,19 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional
+from google.cloud import pubsub_v1
 
-app = FastAPI(title="OpenClaw Security Broker", version="1.0.2")
+app = FastAPI(title="OpenClaw Security Broker", version="1.1.0")
 
-# Secret for HMAC validation
+# Secrets and Config
 HMAC_SECRET = os.getenv("BROKER_HMAC_SECRET", "default_insecure_secret").encode("utf-8")
 MAX_REQUEST_AGE_SECONDS = 300  # 5 minutes
+PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT")
+PUBSUB_TOPIC = os.getenv("PUBSUB_TOPIC", "verified-events")
+
+# Initialize Pub/Sub Publisher if project is set
+publisher = pubsub_v1.PublisherClient() if PROJECT_ID else None
+topic_path = publisher.topic_path(PROJECT_ID, PUBSUB_TOPIC) if publisher else None
 
 seen_requests = {}
 
@@ -51,7 +58,12 @@ class BrokerMessage(BaseModel):
 
 @app.get("/")
 def health_check():
-    return {"status": "ok", "service": "Security Broker is running", "version": "1.0.2"}
+    return {
+        "status": "ok", 
+        "service": "Security Broker is running", 
+        "version": "1.1.0",
+        "pubsub_configured": bool(topic_path)
+    }
 
 @app.post("/relay")
 async def relay_message(msg: BrokerMessage):
@@ -66,7 +78,7 @@ async def relay_message(msg: BrokerMessage):
     if msg.recipient != "main_agent":
          raise HTTPException(status_code=403, detail="Invalid recipient")
 
-    # 3. Cryptographic Signature Validation (MUST BE BEFORE REPLAY CHECK)
+    # 3. Cryptographic Signature Validation
     payload_to_sign = f"{msg.request_id}:{msg.timestamp}:{msg.sender}".encode('utf-8')
     expected_hmac = hmac.new(HMAC_SECRET, payload_to_sign, hashlib.sha256).hexdigest()
     
@@ -75,7 +87,6 @@ async def relay_message(msg: BrokerMessage):
 
     # 4. Check Timestamp (Expiration)
     try:
-        # Handle ISO format correctly regardless of Z or explicit offsets
         if msg.timestamp.endswith('Z'):
             msg_time = datetime.fromisoformat(msg.timestamp[:-1]).replace(tzinfo=timezone.utc)
         else:
@@ -115,4 +126,15 @@ async def relay_message(msg: BrokerMessage):
         }
     }
     
-    return {"status": "accepted", "forwarded_event": safe_event}
+    # 7. Publish to Pub/Sub
+    if topic_path:
+        try:
+            data_bytes = json.dumps(safe_event).encode("utf-8")
+            future = publisher.publish(topic_path, data_bytes)
+            message_id = future.result()
+            return {"status": "accepted", "pubsub_message_id": message_id}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to publish to Pub/Sub: {str(e)}")
+    
+    # Fallback if Pub/Sub is not configured yet
+    return {"status": "accepted", "warning": "Pub/Sub not configured. Event dropped.", "event": safe_event}
