@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional
 
-app = FastAPI(title="OpenClaw Security Broker", version="1.0.1")
+app = FastAPI(title="OpenClaw Security Broker", version="1.0.2")
 
 # Secret for HMAC validation
 HMAC_SECRET = os.getenv("BROKER_HMAC_SECRET", "default_insecure_secret").encode("utf-8")
@@ -31,10 +31,13 @@ class PayloadData(BaseModel):
     @field_validator('links')
     @classmethod
     def check_links(cls, v: List[str]) -> List[str]:
+        sanitized_links = []
         for link in v:
-            if not (link.startswith('http://') or link.startswith('https://')):
+            cleaned_link = link.strip()
+            if not (cleaned_link.lower().startswith('http://') or cleaned_link.lower().startswith('https://')):
                 raise ValueError(f"Invalid URL scheme: {link}")
-        return v
+            sanitized_links.append(cleaned_link)
+        return sanitized_links
 
 class BrokerMessage(BaseModel):
     request_id: str = Field(..., max_length=100)
@@ -48,7 +51,7 @@ class BrokerMessage(BaseModel):
 
 @app.get("/")
 def health_check():
-    return {"status": "ok", "service": "Security Broker is running", "version": "1.0.1"}
+    return {"status": "ok", "service": "Security Broker is running", "version": "1.0.2"}
 
 @app.post("/relay")
 async def relay_message(msg: BrokerMessage):
@@ -63,9 +66,23 @@ async def relay_message(msg: BrokerMessage):
     if msg.recipient != "main_agent":
          raise HTTPException(status_code=403, detail="Invalid recipient")
 
+    # 3. Cryptographic Signature Validation (MUST BE BEFORE REPLAY CHECK)
+    payload_to_sign = f"{msg.request_id}:{msg.timestamp}:{msg.sender}".encode('utf-8')
+    expected_hmac = hmac.new(HMAC_SECRET, payload_to_sign, hashlib.sha256).hexdigest()
+    
+    if not hmac.compare_digest(expected_hmac, msg.signature):
+         raise HTTPException(status_code=401, detail="Invalid cryptographic signature")
+
     # 4. Check Timestamp (Expiration)
     try:
-        msg_time = datetime.fromisoformat(msg.timestamp.replace("Z", "+00:00"))
+        # Handle ISO format correctly regardless of Z or explicit offsets
+        if msg.timestamp.endswith('Z'):
+            msg_time = datetime.fromisoformat(msg.timestamp[:-1]).replace(tzinfo=timezone.utc)
+        else:
+            msg_time = datetime.fromisoformat(msg.timestamp)
+            if msg_time.tzinfo is None:
+                raise ValueError("Timestamp must include timezone info")
+        
         current_time = datetime.now(timezone.utc)
         age = (current_time - msg_time).total_seconds()
         
@@ -85,15 +102,7 @@ async def relay_message(msg: BrokerMessage):
         
     seen_requests[msg.request_id] = current_ts
 
-    # 6. Cryptographic Signature Validation
-    payload_to_sign = f"{msg.request_id}:{msg.timestamp}:{msg.sender}".encode('utf-8')
-    expected_hmac = hmac.new(HMAC_SECRET, payload_to_sign, hashlib.sha256).hexdigest()
-    
-    # STRICT ENFORCEMENT
-    if not hmac.compare_digest(expected_hmac, msg.signature):
-         raise HTTPException(status_code=401, detail="Invalid cryptographic signature")
-
-    # 7. Package as Untrusted Data
+    # 6. Package as Untrusted Data
     safe_event = {
         "verified_by_broker": True,
         "request_id": msg.request_id,
