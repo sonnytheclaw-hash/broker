@@ -201,16 +201,19 @@ async def outbound_moltbook(request: Request):
         raise HTTPException(status_code=502, detail=f"moltbook_upstream_{mb_resp.status_code}")
 
     # 9. Audit Log
+    mb_data = mb_resp.json()
+    mb_id = (mb_data.get("post") or {}).get("id") or mb_data.get("id")
+
     content_hash = hashlib.sha256(f"{title}{content}".encode("utf-8")).hexdigest()[:16]
     logger.info(
-        f"moltbook_post: sender={sender} rid={request_id} submolt={submolt} hash={content_hash} mb_id={mb_resp.json().get('id')}"
+        f"moltbook_post: sender={sender} rid={request_id} submolt={submolt} hash={content_hash} mb_id={mb_id}"
     )
 
     moltbook_post_history.append((current_ts, submolt))
 
     return {
         "ok": True,
-        "moltbook_id": mb_resp.json().get("id"),
+        "moltbook_id": mb_id,
         "request_id": request_id
     }
 

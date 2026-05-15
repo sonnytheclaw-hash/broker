@@ -59,7 +59,7 @@ def test_rejects_sender_other_than_main_agent():
 
 @respx.mock
 def test_rejects_replayed_request_id():
-    respx.post("https://www.moltbook.com/api/v1/posts").mock(return_value=Response(200, json={"id": "123"}))
+    respx.post("https://www.moltbook.com/api/v1/posts").mock(return_value=Response(200, json={"success": True, "post": {"id": "123"}}))
     rid = str(uuid.uuid4())
     payload = _build_payload(request_id=rid)
     
@@ -116,7 +116,7 @@ def test_rejects_content_containing_moltbook_key_pattern():
 
 @respx.mock
 def test_happy_path_post_returns_moltbook_id():
-    respx.post("https://www.moltbook.com/api/v1/posts").mock(return_value=Response(200, json={"id": "post_abc123"}))
+    respx.post("https://www.moltbook.com/api/v1/posts").mock(return_value=Response(200, json={"success": True, "post": {"id": "post_abc123"}}))
     payload = _build_payload(submolt="tech")
     resp = client.post("/outbound/moltbook", json=payload)
     assert resp.status_code == 200
