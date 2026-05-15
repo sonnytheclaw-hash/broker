@@ -42,10 +42,14 @@ def sign_payload(payload: dict, secret: bytes = None) -> str:
     ).encode("utf-8")
     return hmac.new(secret, body, hashlib.sha256).hexdigest()
 # Outbound Config & Globals
-OUTBOUND_SECRET_ENV = os.getenv("BROKER_OUTBOUND_HMAC_SECRET", "default_outbound_secret")
+OUTBOUND_SECRET_ENV = os.environ.get("BROKER_OUTBOUND_HMAC_SECRET")
+if not OUTBOUND_SECRET_ENV:
+    raise RuntimeError("CRITICAL: BROKER_OUTBOUND_HMAC_SECRET is not set")
 OUTBOUND_HMAC_SECRET = OUTBOUND_SECRET_ENV.encode("utf-8")
 
-MOLTBOOK_API_KEY = os.getenv("MOLTBOOK_API_KEY", "")
+MOLTBOOK_API_KEY = os.environ.get("MOLTBOOK_API_KEY")
+if not MOLTBOOK_API_KEY:
+    raise RuntimeError("CRITICAL: MOLTBOOK_API_KEY is not set")
 MOLTBOOK_ALLOWLIST_ENV = os.getenv("MOLTBOOK_SUBMOLT_ALLOWLIST", "*")
 MOLTBOOK_SUBMOLT_ALLOWLIST = set(MOLTBOOK_ALLOWLIST_ENV.split(",")) if MOLTBOOK_ALLOWLIST_ENV != "*" else "*"
 MOLTBOOK_DAILY_POST_BUDGET = int(os.getenv("MOLTBOOK_DAILY_POST_BUDGET", "100"))
